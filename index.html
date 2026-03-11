@@ -53,7 +53,7 @@
             modal: null // 커스텀 모달 상태 { type, title, message, isPassword, onConfirm }
         };
 
-        // 3. 상태 업데이트 및 로컬스토리지 동기화
+        // 3. 상태 업데이트 및 로컬스토리지 동기화 (전체 화면 렌더링용)
         function updateState(newState) {
             state = { ...state, ...newState };
             localStorage.setItem('saimidang_attendance', JSON.stringify(state.attendance));
@@ -62,7 +62,7 @@
             render();
         }
 
-        // 커스텀 모달 호출 함수 (기본 alert, prompt, confirm 대체)
+        // 커스텀 모달 호출 함수
         function showModal(options) {
             updateState({ modal: options });
             if (options.type === 'prompt') {
@@ -117,7 +117,6 @@
                 }
             },
 
-            // [관리자 전용] 비밀번호 변경 기능
             updateAdminPw: () => {
                 showModal({
                     type: 'prompt',
@@ -129,7 +128,6 @@
                             showModal({ type: 'alert', title: '인증 실패', message: '현재 비밀번호가 일치하지 않습니다.' });
                             return;
                         }
-                        // 약간의 지연 후 새 비밀번호 입력창 띄우기 (애니메이션 겹침 방지)
                         setTimeout(() => {
                             showModal({
                                 type: 'prompt',
@@ -148,7 +146,6 @@
                 });
             },
 
-            // [관리자 전용] 선수 추가 기능
             addPlayer: () => {
                 showModal({
                     type: 'prompt',
@@ -166,7 +163,6 @@
                 });
             },
 
-            // [관리자 전용] 선수 삭제 기능
             delPlayer: (id, name) => {
                 showModal({
                     type: 'confirm',
@@ -179,16 +175,23 @@
                 });
             },
 
-            // 출석 체크 토글
+            // [수정됨] 출석 체크 토글 (스크롤 튕김 방지 처리 적용)
             toggleCheck: (pid) => {
                 if (!state.isAdmin) return;
                 const key = `${getYMD(state.currentDate)}-${pid}`;
-                updateState({ 
-                    attendance: { ...state.attendance, [key]: !state.attendance[key] } 
-                });
+                
+                // 전체 화면 재렌더링 방지를 위해 updateState를 쓰지 않고 데이터만 변경
+                state.attendance[key] = !state.attendance[key];
+                localStorage.setItem('saimidang_attendance', JSON.stringify(state.attendance));
+                
+                // 출석부 화면인 경우 리스트만 빠르게 부분 업데이트
+                if (state.view === 'attendance') {
+                    renderAttendanceList();
+                } else {
+                    render(); // 다른 뷰에서는 일반 렌더링
+                }
             },
 
-            // 날짜/월 조정
             adjustDate: (val) => {
                 const d = new Date(state.currentDate);
                 d.setDate(d.getDate() + val);
@@ -199,6 +202,21 @@
                 const d = new Date(state.rankingDate);
                 d.setMonth(d.getMonth() + val);
                 updateState({ rankingDate: d });
+            },
+
+            copyUrl: () => {
+                const url = window.location.href;
+                const textArea = document.createElement("textarea");
+                textArea.value = url;
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    showModal({ type: 'alert', title: '복사 완료', message: '사이트 주소가 복사되었습니다.\n팀원들에게 링크를 공유해보세요!' });
+                } catch (err) {
+                    showModal({ type: 'alert', title: '복사 실패', message: '주소 복사에 실패했습니다. 브라우저 주소창에서 직접 복사해주세요.' });
+                }
+                document.body.removeChild(textArea);
             }
         };
 
@@ -225,19 +243,56 @@
             }).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
         };
 
+        const processRankings = (stats) => {
+            const groups = [];
+            let currentRank = 1;
+            stats.forEach((s, i) => {
+                if (i > 0 && s.count < stats[i-1].count) {
+                    currentRank = i + 1; 
+                }
+                const group = groups.find(g => g.count === s.count);
+                if (group) {
+                    group.players.push(s); 
+                } else {
+                    groups.push({ rank: currentRank, count: s.count, players: [s] });
+                }
+            });
+            return groups;
+        };
+
         // 5. 메인 렌더러
         function render() {
             const app = document.getElementById('app');
-            const currentMonth = state.currentDate.getMonth() + 1;
-            const topStats = getStats('monthly', state.currentDate);
-            const top5 = topStats.slice(0, 5);
+            // 전체 렌더링 시 윈도우 스크롤 위치 저장 (전역적인 스크롤 튕김 방지)
+            const currentScrollY = window.scrollY;
 
-            // 순위 페이지용 데이터 및 최고 점수 계산 (그래프 비율 계산용)
-            const rankingStats = getStats(state.rankingTab);
-            const maxRankingCount = rankingStats.length > 0 ? Math.max(...rankingStats.map(s => s.count)) : 1;
+            const currentMonth = state.currentDate.getMonth() + 1;
+            
+            const rawTopStats = getStats('monthly', state.currentDate);
+            const rawTotalStats = getStats('total');
+            const rawRankingStats = getStats(state.rankingTab);
+
+            const topGroups = processRankings(rawTopStats).filter(g => g.count > 0);
+            const totalGroups = processRankings(rawTotalStats).filter(g => g.count > 0);
+            const rankingGroups = processRankings(rawRankingStats).filter(g => g.count > 0);
+
+            const top1Monthly = topGroups[0] || { count: 0, players: [] };
+            const totalTop1 = totalGroups[0] || { count: 0, players: [] };
+
+            const maxRankingCount = rankingGroups.length > 0 ? Math.max(...rankingGroups.map(s => s.count)) : 1;
+
+            const formatTop1Names = (players) => {
+                if (!players || players.length === 0) return '<h2 class="text-3xl font-black mb-4 tracking-tight">기록 없음</h2>';
+                const displayPlayers = players.slice(0, 3);
+                const moreCount = players.length - 3;
+                
+                const namesHtml = displayPlayers.map(p => `<span class="text-2xl font-black tracking-tight leading-none">${p.name}</span>`).join('<span class="text-2xl font-black text-white/50 leading-none mr-1">,</span>');
+                const moreHtml = moreCount > 0 ? `<span class="text-sm font-bold text-white/90 leading-none mb-0.5 ml-1 bg-white/20 px-2 py-1 rounded-lg">외 ${moreCount}명</span>` : '';
+                
+                return `<div class="flex flex-wrap items-end gap-y-2 mb-4 min-h-[32px]">${namesHtml}${moreHtml}</div>`;
+            };
 
             app.innerHTML = `
-                <!-- 헤더 -->
                 <header class="sticky top-0 bg-white/95 backdrop-blur-md border-b border-slate-100 z-50 px-6 py-5">
                     <div class="max-w-md mx-auto flex items-center justify-between">
                         <div class="flex items-center gap-3">
@@ -256,38 +311,55 @@
                 <main class="max-w-md mx-auto p-5 space-y-6">
                     ${state.view === 'dashboard' ? `
                         <div class="animate-fade-in space-y-6">
-                            <!-- 1위 강조 카드 -->
-                            <div class="top-rank-card rounded-[40px] p-8 text-white shadow-2xl relative overflow-hidden">
-                                <i data-lucide="trophy" class="absolute -right-8 -bottom-8 w-44 h-44 opacity-20 rotate-12"></i>
-                                <div class="relative z-10">
-                                    <div class="bg-white/20 w-fit px-4 py-1.5 rounded-full text-[10px] font-black mb-6 border border-white/30 backdrop-blur-sm uppercase tracking-widest">${currentMonth}월의 주인공</div>
-                                    <p class="text-white/70 text-sm font-bold">현재 1위</p>
-                                    <h2 class="text-5xl font-black mt-1 mb-8 tracking-tight">${topStats[0]?.count > 0 ? topStats[0].name : '기록 없음'}</h2>
-                                    <div class="bg-white text-rose-600 w-fit px-5 py-2.5 rounded-2xl font-black text-xl shadow-xl shadow-rose-900/20">
-                                        ${topStats[0]?.count || 0} <span class="text-xs ml-0.5">회 출석</span>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="bg-gradient-to-br from-rose-500 to-rose-600 rounded-[32px] p-5 text-white shadow-lg shadow-rose-900/10 relative overflow-hidden">
+                                    <i data-lucide="award" class="absolute -right-3 -bottom-3 w-24 h-24 opacity-20 rotate-12"></i>
+                                    <div class="relative z-10">
+                                        <div class="bg-white/20 w-fit px-3 py-1 rounded-full text-[10px] font-black mb-3 border border-white/30 backdrop-blur-sm">${currentMonth}월 랭킹 현황</div>
+                                        ${formatTop1Names(top1Monthly.players)}
+                                        <div class="bg-white/20 w-fit px-3 py-1.5 rounded-xl font-black text-base shadow-sm backdrop-blur-sm">
+                                            ${top1Monthly.count} <span class="text-xs ml-0.5 font-bold">회</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="bg-gradient-to-br from-amber-400 to-orange-500 rounded-[32px] p-5 text-white shadow-lg shadow-orange-900/10 relative overflow-hidden">
+                                    <i data-lucide="crown" class="absolute -right-3 -bottom-3 w-24 h-24 opacity-20 rotate-12"></i>
+                                    <div class="relative z-10">
+                                        <div class="bg-white/20 w-fit px-3 py-1 rounded-full text-[10px] font-black mb-3 border border-white/30 backdrop-blur-sm">2026년 (누적)</div>
+                                        ${formatTop1Names(totalTop1.players)}
+                                        <div class="bg-white/20 w-fit px-3 py-1.5 rounded-xl font-black text-base shadow-sm backdrop-blur-sm">
+                                            ${totalTop1.count} <span class="text-xs ml-0.5 font-bold">회</span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
 
-                            <!-- TOP 5 리스트 -->
                             <div class="bg-white rounded-[40px] p-7 shadow-sm border border-slate-100">
                                 <div class="flex items-center justify-between mb-6">
                                     <h3 class="text-lg font-black text-slate-800 flex items-center gap-2"><i data-lucide="award" class="text-amber-500 w-5 h-5"></i> 월간 랭킹 TOP 5</h3>
                                     <button onclick="changeView('ranking')" class="text-[11px] font-bold text-slate-300">더보기</button>
                                 </div>
                                 <div class="space-y-4">
-                                    ${top5.map((r, i) => `
+                                    ${topGroups.slice(0, 5).map((group, i) => `
                                         <div class="flex items-center justify-between">
-                                            <div class="flex items-center gap-4">
-                                                <div class="w-10 h-10 rounded-2xl flex items-center justify-center text-lg font-black 
+                                            <div class="flex items-center gap-4 flex-1 pr-4">
+                                                <div class="shrink-0 w-10 h-10 rounded-2xl flex items-center justify-center text-lg font-black 
                                                     ${i === 0 ? 'bg-amber-100 text-amber-600' : i === 1 ? 'bg-slate-100 text-slate-400' : i === 2 ? 'bg-orange-100 text-orange-600' : 'bg-slate-50 text-slate-300'}">
-                                                    ${i < 3 ? ['🥇','🥈','🥉'][i] : i + 1}
+                                                    ${i < 3 ? ['🥇','🥈','🥉'][i] : group.rank}
                                                 </div>
-                                                <span class="font-black text-slate-700 text-lg">${r.name}</span>
+                                                <div class="flex flex-col">
+                                                    <div class="flex items-center gap-1.5 flex-wrap">
+                                                        <span class="font-black text-slate-700 text-lg">${group.players.slice(0, 2).map(p=>p.name).join(', ')}</span>
+                                                        ${group.players.length > 2 ? `<span class="text-[10px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-md">외 ${group.players.length-2}명</span>` : ''}
+                                                    </div>
+                                                    ${group.players.length > 1 ? `<span class="text-[10px] text-rose-500 font-bold tracking-tight">공동 ${group.rank}위</span>` : ''}
+                                                </div>
                                             </div>
-                                            <p class="text-xl font-black ${r.count > 0 ? 'text-rose-600' : 'text-slate-200'}">${r.count}<span class="text-xs ml-0.5 font-bold text-slate-300">회</span></p>
+                                            <p class="text-xl font-black shrink-0 ${group.count > 0 ? 'text-rose-600' : 'text-slate-200'}">${group.count}<span class="text-xs ml-0.5 font-bold text-slate-300">회</span></p>
                                         </div>
                                     `).join('')}
+                                    ${topGroups.length === 0 ? '<p class="text-center text-sm font-bold text-slate-400 py-4">아직 기록이 없습니다.</p>' : ''}
                                 </div>
                             </div>
 
@@ -320,7 +392,7 @@
                                 </div>
                                 <div class="relative">
                                     <i data-lucide="search" class="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300 w-5 h-5"></i>
-                                    <input type="text" placeholder="선수 이름으로 찾기..." oninput="state.searchTerm=this.value; renderAttendanceList()" class="w-full bg-slate-50 border-none rounded-2xl py-5 pl-14 pr-6 text-sm focus:ring-2 focus:ring-rose-500 outline-none">
+                                    <input type="text" value="${state.searchTerm}" placeholder="선수 이름으로 찾기..." oninput="state.searchTerm=this.value; renderAttendanceList()" class="w-full bg-slate-50 border-none rounded-2xl py-5 pl-14 pr-6 text-sm focus:ring-2 focus:ring-rose-500 outline-none">
                                 </div>
                             </div>
                             <div id="attendanceItems" class="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-y-auto custom-scroll max-h-[calc(100vh-350px)] divide-y divide-slate-50 min-h-[300px]">
@@ -340,16 +412,12 @@
                                         <p class="font-black text-slate-800 text-xl">${state.rankingDate.getFullYear()}년 ${state.rankingDate.getMonth()+1}월</p>
                                         <button onclick="adjustMonth(1)" class="text-slate-300 hover:text-rose-500"><i data-lucide="chevron-right" class="w-6 h-6"></i></button>
                                     </div>
-                                ` : '<p class="font-black text-slate-800 text-xl py-2 tracking-widest uppercase text-rose-600">All-Time Hall of Fame</p>'}
+                                ` : '<p class="font-black text-slate-800 text-xl py-2 tracking-widest uppercase text-rose-600">2026년 전체 누적 순위</p>'}
                             </div>
                             
-                            <!-- 개선된 순위 리스트 -->
                             <div class="space-y-3 pb-6 overflow-y-auto custom-scroll max-h-[calc(100vh-350px)] pr-2">
-                                ${rankingStats.map((r, i) => {
-                                    // 1등 대비 현재 선수의 비율 (%) - 최소 2% 보장하여 바가 보이도록 설정
-                                    const pct = Math.max((r.count / (maxRankingCount || 1)) * 100, 2);
-                                    
-                                    // 1~3위 디자인 (독립된 카드형)
+                                ${rankingGroups.map((group, i) => {
+                                    const pct = Math.max((group.count / (maxRankingCount || 1)) * 100, 2);
                                     if (i < 3) {
                                         const styles = [
                                             { border: 'border-amber-200', bg: 'bg-gradient-to-r from-amber-50 to-white', iconBg: 'bg-amber-100 text-amber-600', icon: '🥇', bar: 'bg-amber-400' },
@@ -360,50 +428,63 @@
                                         return `
                                             <div class="relative overflow-hidden rounded-[32px] border-2 ${styles.border} ${styles.bg} shadow-sm transform transition-all hover:scale-[1.02]">
                                                 <div class="p-5 flex items-center justify-between relative z-10">
-                                                    <div class="flex items-center gap-5">
-                                                        <div class="w-12 h-12 rounded-[20px] flex items-center justify-center text-2xl shadow-inner ${styles.iconBg}">${styles.icon}</div>
-                                                        <div>
-                                                            <p class="text-xl font-bold text-slate-800">${r.name}</p>
-                                                            <p class="text-[10px] font-black text-slate-400 tracking-widest uppercase">Member No. ${r.id}</p>
+                                                    <div class="flex items-start gap-4 flex-1">
+                                                        <div class="w-12 h-12 shrink-0 rounded-[20px] flex items-center justify-center text-2xl shadow-inner ${styles.iconBg}">${styles.icon}</div>
+                                                        <div class="flex flex-col gap-1 mt-0.5">
+                                                            <p class="text-[10px] font-black text-slate-400 tracking-widest uppercase">
+                                                                ${group.players.length > 1 ? `공동 ${group.rank}위 (${group.players.length}명)` : `${group.rank}위`}
+                                                            </p>
+                                                            <div class="flex flex-wrap gap-1.5 pr-2">
+                                                                ${group.players.map(p => `<span class="text-[13px] font-bold text-slate-800 bg-white/60 px-2.5 py-1 rounded-lg border border-slate-100/50 shadow-sm">${p.name}</span>`).join('')}
+                                                            </div>
                                                         </div>
                                                     </div>
-                                                    <div class="flex flex-col items-end">
+                                                    <div class="flex flex-col items-end shrink-0 ml-2">
                                                         <div class="flex items-baseline gap-1">
-                                                            <span class="text-3xl font-black text-slate-800">${r.count}</span>
+                                                            <span class="text-3xl font-black text-slate-800">${group.count}</span>
                                                             <span class="text-xs font-bold text-slate-400">회</span>
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <!-- 하단 프로그레스 바 -->
                                                 <div class="absolute bottom-0 left-0 h-1.5 ${styles.bar} rounded-r-full transition-all duration-1000 ease-out" style="width: ${pct}%"></div>
                                             </div>
                                         `;
                                     }
-                                    
-                                    // 4위 이하 디자인 (리스트 바 차트형)
                                     return `
                                         <div class="relative overflow-hidden bg-white rounded-[24px] border border-slate-100 shadow-sm p-4 flex items-center justify-between">
-                                            <!-- 배경 프로그레스 바 -->
                                             <div class="absolute top-0 left-0 h-full bg-rose-50/70 rounded-r-3xl transition-all duration-1000 ease-out" style="width: ${pct}%"></div>
-                                            
-                                            <div class="flex items-center gap-4 relative z-10">
-                                                <span class="w-10 text-center font-black text-xl text-slate-300">${i+1}</span>
-                                                <div>
-                                                    <p class="text-lg font-bold text-slate-700">${r.name}</p>
+                                            <div class="flex items-center gap-4 relative z-10 flex-1 pr-4">
+                                                <div class="w-10 flex flex-col items-center shrink-0">
+                                                    <span class="text-center font-black text-xl text-slate-300">${group.rank}</span>
+                                                    ${group.players.length > 1 ? `<span class="text-[8px] text-rose-400 font-bold -mt-1 tracking-tight">공동</span>` : ''}
+                                                </div>
+                                                <div class="flex flex-wrap gap-1.5 flex-1">
+                                                    ${group.players.map(p => `<span class="text-sm font-bold text-slate-600 bg-white/80 px-2 py-0.5 rounded-md border border-slate-50">${p.name}</span>`).join('')}
                                                 </div>
                                             </div>
-                                            <div class="relative z-10 flex items-baseline gap-1">
-                                                <span class="text-2xl font-black text-rose-500">${r.count}</span>
+                                            <div class="relative z-10 flex items-baseline gap-1 shrink-0">
+                                                <span class="text-2xl font-black text-rose-500">${group.count}</span>
                                                 <span class="text-[10px] font-bold text-slate-400">회</span>
                                             </div>
                                         </div>
                                     `;
                                 }).join('')}
+                                ${rankingGroups.length === 0 ? '<p class="text-center text-sm font-bold text-slate-400 py-10">아직 기록이 없습니다.</p>' : ''}
                             </div>
                         </div>
                     ` : state.view === 'settings' ? `
                         <div class="space-y-6 animate-fade-in pb-10">
-                            <!-- 비밀번호 변경 구역 -->
+                            <div class="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm">
+                                <h3 class="font-black text-slate-800 mb-6 flex items-center gap-3"><i data-lucide="share-2" class="text-rose-500 w-5 h-5"></i> 사이트 공유</h3>
+                                <div class="flex items-center gap-2 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                                    <input type="text" readonly value="${window.location.href}" class="w-full bg-transparent text-sm text-slate-500 outline-none truncate">
+                                    <button onclick="copyUrl()" class="shrink-0 w-10 h-10 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-600 hover:text-rose-600 shadow-sm transition-all active:scale-90">
+                                        <i data-lucide="copy" class="w-4 h-4"></i>
+                                    </button>
+                                </div>
+                                <p class="text-[10px] text-slate-400 font-bold mt-3 ml-2">* 팀원들에게 위 주소를 공유하여 순위를 보여주세요.</p>
+                            </div>
+
                             <div class="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm">
                                 <h3 class="font-black text-slate-800 mb-6 flex items-center gap-3"><i data-lucide="key" class="text-rose-500 w-5 h-5"></i> 관리자 보안</h3>
                                 <button onclick="updateAdminPw()" class="w-full py-5 bg-slate-900 text-white rounded-2xl font-bold flex items-center justify-center gap-2">
@@ -411,7 +492,6 @@
                                 </button>
                             </div>
 
-                            <!-- 선수 목록 관리 구역 -->
                             <div class="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm">
                                 <div class="flex items-center justify-between mb-8">
                                     <h3 class="font-black text-slate-800 flex items-center gap-3"><i data-lucide="users-round" class="text-rose-500 w-5 h-5"></i> 선수 명단 관리</h3>
@@ -451,7 +531,7 @@
                     </div>
                 ` : ''}
 
-                <!-- 커스텀 얼럿/프롬프트/컨펌 모달 -->
+                <!-- 커스텀 모달 -->
                 ${state.modal ? `
                     <div class="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-[120] flex items-center justify-center p-6">
                         <div class="bg-white w-full max-w-sm rounded-[40px] p-8 shadow-2xl animate-fade-in text-center">
@@ -498,11 +578,19 @@
             `;
             lucide.createIcons();
             if (state.view === 'attendance') renderAttendanceList();
+
+            // 전체 렌더링 이후 스크롤 위치 원상복구
+            window.scrollTo(0, currentScrollY);
         }
 
+        // [수정됨] 출석 리스트만 다시 그리는 함수 (스크롤 유지 기능 포함)
         function renderAttendanceList() {
             const container = document.getElementById('attendanceItems');
             if (!container) return;
+
+            // 현재 리스트 박스의 스크롤 위치 저장
+            const currentScroll = container.scrollTop;
+
             const today = getYMD(state.currentDate);
             const filtered = state.players.filter(p => p.name.includes(state.searchTerm));
             
@@ -525,6 +613,9 @@
                     </div>
                 `;
             }).join('');
+
+            // 화면을 새로 그렸더라도 스크롤 위치를 예전과 동일하게 맞춰줌
+            container.scrollTop = currentScroll;
         }
 
         // 앱 구동
