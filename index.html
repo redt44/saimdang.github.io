@@ -99,7 +99,7 @@
 
                 // 정확한 데이터 경로 (규칙 위반 방지)
                 const appId = "saimdang-v1";
-                docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance_store');
+                docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance_store', 'main_doc');
 
                 // 실시간 리스너 연결
                 onSnapshot(docRef, (snapshot) => {
@@ -277,4 +277,5 @@
     </script>
 </body>
 </html>
+
 
