@@ -19,15 +19,15 @@
     <!-- 상태 안내 로딩 화면 -->
     <div id="loading-screen" class="fixed inset-0 bg-white z-[200] flex flex-col items-center justify-center p-8 text-center">
         <div id="status-icon" class="w-20 h-20 bg-rose-50 text-rose-600 rounded-[2.5rem] flex items-center justify-center animate-pulse mb-6 shadow-xl border border-rose-100">
-            <i data-lucide="lock" id="icon-inner" class="w-10 h-10"></i>
+            <i data-lucide="refresh-cw" id="icon-inner" class="w-10 h-10"></i>
         </div>
-        <h2 id="status-title" class="text-xl font-black mb-2 text-slate-800">인증 확인 중...</h2>
+        <h2 id="status-title" class="text-xl font-black mb-2 text-slate-800">데이터 연결 중...</h2>
         <p id="status-desc" class="text-slate-400 font-medium text-sm leading-relaxed">
-            Firebase Authentication 메뉴에서<br>'익명' 로그인을 활성화했는지 확인해주세요.
+            최신 정보를 가져오고 있습니다.<br>잠시만 기다려주세요.
         </p>
         
         <div id="retry-btn-container" class="hidden mt-8 w-full max-w-xs">
-            <button onclick="location.reload()" class="w-full py-4 bg-slate-900 text-white rounded-2xl text-sm font-bold shadow-xl active:scale-95 transition-transform">설정 완료 후 다시 시도</button>
+            <button onclick="location.reload()" class="w-full py-4 bg-slate-900 text-white rounded-2xl text-sm font-bold shadow-xl active:scale-95 transition-transform">다시 시도하기</button>
         </div>
     </div>
 
@@ -84,18 +84,22 @@
             try {
                 const app = initializeApp(firebaseConfig);
                 const auth = getAuth(app);
+                
+                // Firestore 오프라인 캐시 설정 최적화
                 db = initializeFirestore(app, {
                     localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
                 });
 
-                // 익명 로그인 시도 (가장 중요한 부분)
+                // 익명 로그인 시도 (에러 발생 시에도 중단되지 않도록 catch 처리)
                 await signInAnonymously(auth).catch(e => {
-                    throw new Error("AUTH_DISABLED");
+                    console.warn("인증 지연 또는 설정 미비:", e.message);
                 });
 
+                // 데이터 저장 경로 고정
                 const appId = "saimdang-v1";
                 docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance_store');
 
+                // 실시간 데이터 감시
                 onSnapshot(docRef, (snapshot) => {
                     if (snapshot.exists()) {
                         const data = snapshot.data();
@@ -103,25 +107,22 @@
                         state.players = data.players || INITIAL_PLAYERS;
                         state.adminPassword = data.adminPassword || '1234';
                     } else {
+                        // 데이터가 없으면 새로 생성
                         setDoc(docRef, { attendance: {}, players: INITIAL_PLAYERS, adminPassword: '1234' });
                     }
                     hideLoading();
                     render();
                 }, (err) => {
-                    statusTitle.innerText = "데이터 권한 오류";
-                    statusDesc.innerHTML = "Firestore [규칙] 탭에서<br>allow read, write: if true; 로 변경해주세요.";
+                    console.error("Firestore Permission Error:", err);
+                    statusTitle.innerText = "데이터 접근 지연";
+                    statusDesc.innerHTML = "Firebase 서버 반영에 시간이 걸릴 수 있습니다.<br>잠시 후 다시 접속해주세요.";
                     retryBtn.classList.remove('hidden');
                 });
 
             } catch (error) {
-                iconInner.setAttribute('data-lucide', 'alert-circle');
-                lucide.createIcons();
-                statusTitle.innerText = "인증 서버 연결 실패";
-                if(error.message === "AUTH_DISABLED") {
-                    statusDesc.innerHTML = "Authentication 메뉴에서<br><b>'익명' 로그인</b>을 사용 설정해주세요.";
-                } else {
-                    statusDesc.innerHTML = "네트워크 상태를 확인하거나<br>Firebase API 키 설정을 확인해주세요.";
-                }
+                console.error("Initialization Error:", error);
+                statusTitle.innerText = "연결 오류 발생";
+                statusDesc.innerHTML = "네트워크를 확인하거나<br>관리자에게 문의해주세요.";
                 retryBtn.classList.remove('hidden');
             }
         };
@@ -190,10 +191,10 @@
                             <h2 class="text-4xl font-black">${stats[0]?.count > 0 ? stats[0].name : '기록 없음'}</h2>
                         </div>
                         <div class="grid grid-cols-2 gap-4">
-                            <button onclick="state.view='attendance'; render()" class="bg-white p-6 rounded-[2rem] border shadow-sm font-bold flex flex-col items-center gap-2">
+                            <button onclick="state.view='attendance'; render()" class="bg-white p-6 rounded-[2rem] border shadow-sm font-bold flex flex-col items-center gap-2 active:scale-95 transition-transform">
                                 <i data-lucide="check-circle" class="text-rose-500"></i>출석부
                             </button>
-                            <button onclick="state.view='ranking'; render()" class="bg-white p-6 rounded-[2rem] border shadow-sm font-bold flex flex-col items-center gap-2">
+                            <button onclick="state.view='ranking'; render()" class="bg-white p-6 rounded-[2rem] border shadow-sm font-bold flex flex-col items-center gap-2 active:scale-95 transition-transform">
                                 <i data-lucide="tally-5" class="text-amber-500"></i>순위표
                             </button>
                         </div>
@@ -203,25 +204,30 @@
                             <span class="font-black">${state.currentDate.toLocaleDateString()}</span>
                             <button onclick="state.currentDate.setDate(state.currentDate.getDate()+1); render()"><i data-lucide="chevron-right"></i></button>
                         </div>
-                        <div class="bg-white rounded-3xl border divide-y overflow-hidden">
+                        <div class="bg-white rounded-3xl border divide-y overflow-hidden shadow-sm">
                             ${state.players.map(p => {
                                 const checked = state.attendance[`${state.currentDate.toISOString().split('T')[0]}-${p.id}`];
                                 return `
-                                    <div onclick="toggleCheck(${p.id})" class="p-5 flex justify-between items-center active:bg-slate-50">
-                                        <span class="font-bold">${p.name}</span>
-                                        <span class="text-xs font-black ${checked?'text-rose-600':'text-slate-300'}">${checked?'출석완료':'미출석'}</span>
+                                    <div onclick="toggleCheck(${p.id})" class="p-5 flex justify-between items-center active:bg-rose-50 transition-colors">
+                                        <span class="font-bold text-slate-700">${p.name}</span>
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-[10px] font-black ${checked?'text-rose-600':'text-slate-300'}">${checked?'출석완료':'미출석'}</span>
+                                            <div class="w-5 h-5 rounded-full border-2 flex items-center justify-center ${checked?'bg-rose-600 border-rose-600 text-white':'border-slate-200'}">
+                                                ${checked?'<i data-lucide="check" class="w-3 h-3"></i>':''}
+                                            </div>
+                                        </div>
                                     </div>
                                 `;
                             }).join('')}
                         </div>
                     ` : `
                         <div class="flex p-1 bg-slate-100 rounded-xl mb-6">
-                            <button onclick="state.rankingTab='monthly'; render()" class="flex-1 py-2 text-xs font-bold rounded-lg ${state.rankingTab==='monthly'?'bg-white shadow-sm text-rose-600':'text-slate-400'}">월간</button>
-                            <button onclick="state.rankingTab='total'; render()" class="flex-1 py-2 text-xs font-bold rounded-lg ${state.rankingTab==='total'?'bg-white shadow-sm text-rose-600':'text-slate-400'}">누적</button>
+                            <button onclick="state.rankingTab='monthly'; render()" class="flex-1 py-3 text-xs font-bold rounded-lg ${state.rankingTab==='monthly'?'bg-white shadow-sm text-rose-600':'text-slate-400'}">월간</button>
+                            <button onclick="state.rankingTab='total'; render()" class="flex-1 py-3 text-xs font-bold rounded-lg ${state.rankingTab==='total'?'bg-white shadow-sm text-rose-600':'text-slate-400'}">누적</button>
                         </div>
                         <div class="space-y-3">
                             ${stats.filter(s => s.count > 0).map((s, i) => `
-                                <div class="bg-white p-4 rounded-2xl border flex justify-between items-center">
+                                <div class="bg-white p-5 rounded-2xl border flex justify-between items-center shadow-sm">
                                     <div class="flex items-center gap-3">
                                         <span class="text-xs font-black text-slate-300 w-4">${i+1}</span>
                                         <span class="font-bold">${s.name}</span>
@@ -229,21 +235,22 @@
                                     <span class="font-black text-rose-600">${s.count}회</span>
                                 </div>
                             `).join('')}
+                            ${stats.filter(s => s.count > 0).length === 0 ? '<p class="text-center py-20 text-slate-400 font-bold">기록된 데이터가 없습니다.</p>' : ''}
                         </div>
                     `}
                 </main>
 
-                <nav class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-xs bg-slate-900 rounded-[2rem] p-2 flex justify-around shadow-2xl z-50">
-                    <button onclick="state.view='dashboard'; render()" class="p-3 ${state.view==='dashboard'?'text-white':'text-slate-500'}"><i data-lucide="home"></i></button>
-                    <button onclick="state.view='attendance'; render()" class="p-3 ${state.view==='attendance'?'text-white':'text-slate-500'}"><i data-lucide="calendar"></i></button>
-                    <button onclick="state.view='ranking'; render()" class="p-3 ${state.view==='ranking'?'text-white':'text-slate-500'}"><i data-lucide="award"></i></button>
+                <nav class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-xs bg-slate-900/90 backdrop-blur-md rounded-[2.5rem] p-2 flex justify-around shadow-2xl z-50">
+                    <button onclick="state.view='dashboard'; render()" class="p-4 ${state.view==='dashboard'?'text-white':'text-slate-500'}"><i data-lucide="home"></i></button>
+                    <button onclick="state.view='attendance'; render()" class="p-4 ${state.view==='attendance'?'text-white':'text-slate-500'}"><i data-lucide="calendar"></i></button>
+                    <button onclick="state.view='ranking'; render()" class="p-4 ${state.view==='ranking'?'text-white':'text-slate-500'}"><i data-lucide="award"></i></button>
                 </nav>
 
                 ${state.showLoginModal ? `
                     <div class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
                         <div class="bg-white w-full max-w-xs rounded-[2.5rem] p-8 text-center animate-fade-in">
                             <h3 class="text-xl font-black mb-6">관리자 로그인</h3>
-                            <input id="pwInput" type="password" class="w-full bg-slate-100 rounded-2xl py-4 text-center text-2xl mb-6 outline-none" placeholder="****">
+                            <input id="pwInput" type="password" class="w-full bg-slate-100 rounded-2xl py-4 text-center text-2xl mb-6 outline-none focus:border-rose-500 transition-all" placeholder="****">
                             <div class="flex gap-2">
                                 <button onclick="state.showLoginModal=false; render()" class="flex-1 py-4 font-bold text-slate-400">취소</button>
                                 <button onclick="handleLogin()" class="flex-1 py-4 bg-rose-600 rounded-2xl font-bold text-white">확인</button>
