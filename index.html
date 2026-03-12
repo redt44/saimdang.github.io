@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <!-- 모바일 앱처럼 보이게 하는 PWA 메타 태그 추가 -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="mobile-web-app-capable" content="yes">
@@ -26,16 +25,12 @@
 <body class="bg-[#F8FAFC] text-slate-900 pb-28">
     <div id="app"></div>
 
-    <!-- Firebase v11.6.1 모듈 연동 -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
-        // =========================================================================
-        // 🚨 여기에 파이어베이스(Firebase) 콘솔에서 복사한 설정값을 붙여넣으세요! 🚨
-        // =========================================================================
-        const myFirebaseConfig = {
+        const firebaseConfig = {
             apiKey: "AIzaSyBafrYaZk0EYDvUICwLdp4AUUTiukhdKM4",
             authDomain: "saimdang-c8744.firebaseapp.com",
             projectId: "saimdang-c8744",
@@ -43,18 +38,12 @@
             messagingSenderId: "1018293325196",
             appId: "1:1018293325196:web:f1536839991aaf241c1aa9"
         };
-
-        // (시스템 내부 구동용 설정 - 무시하셔도 됩니다)
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : myFirebaseConfig;
-        const appIdStr = typeof __app_id !== 'undefined' ? __app_id : 'saimdang-fc-app';
         
-        // 파이어베이스 초기화
         const appFirebase = initializeApp(firebaseConfig);
         const db = getFirestore(appFirebase);
         const auth = getAuth(appFirebase);
         let currentUser = null;
 
-        // 1. 초기 데이터
         const INITIAL_PLAYERS = [
             { id: 1, name: '강세라' }, { id: 2, name: '강은정' }, { id: 3, name: '고정희' },
             { id: 4, name: '권은빈' }, { id: 5, name: '김다혜' }, { id: 6, name: '김미정' },
@@ -70,9 +59,7 @@
             { id: 34, name: '황보영' }
         ];
 
-        // 2. 상태 관리 (UI 상태 + DB 상태 분리)
         let state = {
-            // UI 상태 (저장 안 됨)
             view: 'dashboard',
             isAdmin: false,
             currentDate: new Date(),
@@ -82,49 +69,44 @@
             activeModal: null, 
             modalData: null,
             alertMessage: '',
-            isDataLoaded: false, // DB 로딩 완료 여부
-            
-            // DB 동기화 상태 (초기값)
+            isDataLoaded: false, 
             adminPassword: '1234',
             attendance: {},
             players: INITIAL_PLAYERS
         };
 
-        // UI만 업데이트
+        // 🚨 탭 전환 시에만 애니메이션을 주기 위한 변수
+        let lastRenderedView = null;
+
         window.updateUI = function(newState) {
             state = { ...state, ...newState };
             render();
         };
 
-        // DB에 업데이트 (자동 동기화)
         window.updateDB = async function(newDBState) {
             if (!currentUser) return;
             state = { ...state, ...newDBState };
-            render(); // 화면 즉시 반영 (빠른 반응성)
+            render(); 
             
             try {
-                const docRef = doc(db, 'artifacts', appIdStr, 'public', 'data', 'saimdang', 'main');
+                const docRef = doc(db, 'saimdang_data', 'main');
                 await setDoc(docRef, {
                     players: state.players,
                     attendance: state.attendance,
                     adminPassword: state.adminPassword
                 }, { merge: true });
             } catch (e) {
-                console.error("DB Save Error:", e);
+                console.error("DB 저장 에러:", e);
+                window.updateUI({ activeModal: 'alert', alertMessage: '데이터 저장에 실패했습니다. 권한 설정을 확인해주세요.' });
             }
         };
 
-        // 3. 파이어베이스 인증 & 실시간 데이터 수신
         const initAuth = async () => {
             try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
+                await signInAnonymously(auth);
             } catch (error) {
-                console.error("Auth init failed:", error);
-                window.updateUI({ alertMessage: "DB 연결 실패. 설정값을 확인해주세요.", isDataLoaded: true });
+                console.error("인증 실패:", error);
+                window.updateUI({ alertMessage: "DB 연결 실패. 콘솔 설정을 확인해주세요.", isDataLoaded: true });
             }
         };
 
@@ -134,7 +116,7 @@
         });
 
         const listenToData = () => {
-            const docRef = doc(db, 'artifacts', appIdStr, 'public', 'data', 'saimdang', 'main');
+            const docRef = doc(db, 'saimdang_data', 'main');
             onSnapshot(docRef, (snap) => {
                 if (snap.exists()) {
                     const data = snap.data();
@@ -142,7 +124,6 @@
                     state.attendance = data.attendance || {};
                     state.adminPassword = data.adminPassword || '1234';
                 } else {
-                    // 최초 접속 시 DB 구조 생성
                     setDoc(docRef, {
                         players: INITIAL_PLAYERS,
                         attendance: {},
@@ -152,13 +133,13 @@
                 state.isDataLoaded = true;
                 render();
             }, (error) => {
-                console.error("Snapshot error:", error);
+                console.error("데이터 수신 에러:", error);
+                window.updateUI({ isDataLoaded: true });
             });
         };
 
-        initAuth(); // 인증 시작
+        initAuth();
 
-        // 4. 이벤트 핸들러 모음
         window.changeView = (v) => window.updateUI({ view: v, searchTerm: '' });
         window.closeModal = () => window.updateUI({ activeModal: null, alertMessage: '', modalData: null });
 
@@ -234,7 +215,6 @@
             renderAttendanceList();
         };
 
-        // 유틸리티
         const getYMD = (date) => {
             const y = date.getFullYear();
             const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -312,21 +292,24 @@
             }
         };
 
-        // 5. 메인 렌더링
         function render() {
             const app = document.getElementById('app');
             if (!app) return;
 
-            // 로딩 화면
             if (!state.isDataLoaded) {
                 app.innerHTML = `
                     <div class="fixed inset-0 bg-[#F8FAFC] flex flex-col items-center justify-center z-50">
                         <div class="w-16 h-16 border-4 border-slate-100 border-t-orange-500 rounded-full animate-spin mb-6"></div>
-                        <p class="text-slate-500 font-bold animate-pulse text-sm">실시간 데이터를 불러오는 중입니다...</p>
+                        <p class="text-slate-500 font-bold animate-pulse text-sm">실시간 데이터베이스 연결 중...</p>
                     </div>
                 `;
                 return;
             }
+
+            // 🚨 메뉴가 변경될 때만 애니메이션 클래스 적용 (깜빡임 방지 핵심 로직)
+            const isNewView = lastRenderedView !== state.view;
+            lastRenderedView = state.view;
+            const animClass = isNewView ? 'animate-fade-in' : '';
 
             const totalStats = getStats('total');
             const monthlyStats = getStats('monthly', state.currentDate);
@@ -361,12 +344,12 @@
 
                 <main class="max-w-md mx-auto p-5 space-y-6">
                     ${state.view === 'dashboard' ? `
-                        <div class="animate-fade-in space-y-6">
+                        <div class="${animClass} space-y-6">
                             <div class="top-rank-card rounded-[40px] p-8 text-white shadow-2xl relative overflow-hidden">
                                 <i data-lucide="trophy" class="absolute -right-8 -bottom-8 w-44 h-44 opacity-20 rotate-12"></i>
                                 <div class="relative z-10">
                                     <div class="bg-white/20 w-fit px-4 py-1.5 rounded-full text-[11px] font-black mb-6 border border-white/30 backdrop-blur-sm tracking-widest">
-                                        2026년 누적 출석왕
+                                        명예의 전당 (누적 1위)
                                     </div>
                                     <p class="text-white/80 text-sm font-bold mb-1">${topCount > 0 ? (isTie ? '공동 1위' : '단독 1위') : '-'}</p>
                                     <h2 class="text-3xl sm:text-4xl font-black mb-8 tracking-tight break-keep leading-snug">
@@ -400,7 +383,7 @@
                             </div>
                         </div>
                     ` : state.view === 'attendance' ? `
-                        <div class="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden animate-fade-in">
+                        <div class="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden ${animClass}">
                             <div class="p-6 space-y-5 border-b border-slate-50">
                                 <div class="flex items-center justify-between">
                                     <button onclick="window.adjustDate(-1)" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center hover:bg-slate-100 transition-colors"><i data-lucide="chevron-left" class="w-6 h-6 text-slate-400"></i></button>
@@ -412,13 +395,13 @@
                                 </div>
                                 <div class="relative">
                                     <i data-lucide="search" class="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300 w-5 h-5"></i>
-                                    <input type="text" placeholder="선수 이름 검색..." oninput="window.handleSearch(this.value)" class="w-full bg-slate-50 border-none rounded-2xl py-5 pl-14 pr-6 text-sm focus:ring-2 focus:ring-orange-500 outline-none">
+                                    <input type="text" value="${state.searchTerm}" placeholder="선수 이름 검색..." oninput="window.handleSearch(this.value)" class="w-full bg-slate-50 border-none rounded-2xl py-5 pl-14 pr-6 text-sm focus:ring-2 focus:ring-orange-500 outline-none">
                                 </div>
                             </div>
                             <div id="attendanceItems" class="divide-y divide-slate-50 min-h-[300px]"></div>
                         </div>
                     ` : state.view === 'ranking' ? `
-                        <div class="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden animate-fade-in">
+                        <div class="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden ${animClass}">
                             <div class="p-6 space-y-6 text-center border-b border-slate-50">
                                 <div class="flex p-1.5 bg-slate-100 rounded-2xl">
                                     <button onclick="window.updateUI({rankingTab:'monthly'})" class="flex-1 py-3.5 text-xs font-black rounded-xl ${state.rankingTab==='monthly'?'bg-white text-orange-600 shadow-sm':'text-slate-400'}">월간</button>
@@ -448,7 +431,7 @@
                             </div>
                         </div>
                     ` : state.view === 'settings' ? `
-                        <div class="space-y-6 animate-fade-in pb-10">
+                        <div class="space-y-6 ${animClass} pb-10">
                             <div class="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm">
                                 <h3 class="font-black text-slate-800 mb-6 flex items-center gap-3"><i data-lucide="lock" class="text-orange-500 w-5 h-5"></i> 보안 설정</h3>
                                 <button onclick="window.openChangePwModal()" class="w-full py-5 bg-slate-900 text-white rounded-2xl font-bold active:bg-slate-800 transition-colors">
@@ -476,7 +459,7 @@
                     ` : ''}
                 </main>
 
-                <!-- 중앙 제어 자체 모달 창 -->
+                <!-- 모달 창에는 계속 애니메이션 유지 -->
                 ${state.activeModal ? `
                     <div class="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-[100] flex items-center justify-center p-6 animate-fade-in">
                         <div class="bg-white w-full max-w-xs rounded-[40px] p-8 shadow-2xl text-center relative">
@@ -485,7 +468,6 @@
                     </div>
                 ` : ''}
 
-                <!-- 하단 내비 -->
                 <nav class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-sm bg-slate-900/95 backdrop-blur-2xl rounded-[40px] p-3 shadow-2xl z-40 flex justify-around items-center border border-white/10">
                     <button onclick="window.changeView('dashboard')" class="px-6 py-3 flex flex-col items-center gap-1 rounded-[28px] transition-all hover:bg-white/20 ${state.view==='dashboard'?'text-white bg-white/10':'text-slate-500'}">
                         <i data-lucide="home" class="w-6 h-6"></i><span class="text-[10px] font-bold">홈</span>
@@ -538,8 +520,6 @@
                 `;
             }).join('');
         }
-
-        render(); // 최초 로딩 화면 띄우기
     </script>
 </body>
 </html>
