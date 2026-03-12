@@ -26,7 +26,34 @@
 <body class="bg-[#F8FAFC] text-slate-900 pb-28">
     <div id="app"></div>
 
-    <script>
+    <!-- Firebase v11.6.1 모듈 연동 -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        // =========================================================================
+        // 🚨 여기에 파이어베이스(Firebase) 콘솔에서 복사한 설정값을 붙여넣으세요! 🚨
+        // =========================================================================
+        const myFirebaseConfig = {
+            apiKey: "AIzaSyBafrYaZk0EYDvUICwLdp4AUUTiukhdKM4",
+            authDomain: "saimdang-c8744.firebaseapp.com",
+            projectId: "saimdang-c8744",
+            storageBucket: "saimdang-c8744.firebasestorage.app",
+            messagingSenderId: "1018293325196",
+            appId: "1:1018293325196:web:f1536839991aaf241c1aa9"
+        };
+
+        // (시스템 내부 구동용 설정 - 무시하셔도 됩니다)
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : myFirebaseConfig;
+        const appIdStr = typeof __app_id !== 'undefined' ? __app_id : 'saimdang-fc-app';
+        
+        // 파이어베이스 초기화
+        const appFirebase = initializeApp(firebaseConfig);
+        const db = getFirestore(appFirebase);
+        const auth = getAuth(appFirebase);
+        let currentUser = null;
+
         // 1. 초기 데이터
         const INITIAL_PLAYERS = [
             { id: 1, name: '강세라' }, { id: 2, name: '강은정' }, { id: 3, name: '고정희' },
@@ -43,117 +70,163 @@
             { id: 34, name: '황보영' }
         ];
 
-        // 2. 상태 관리
+        // 2. 상태 관리 (UI 상태 + DB 상태 분리)
         let state = {
+            // UI 상태 (저장 안 됨)
             view: 'dashboard',
             isAdmin: false,
-            adminPassword: localStorage.getItem('saimidang_admin_pw') || '1234',
-            attendance: JSON.parse(localStorage.getItem('saimidang_attendance')) || {},
             currentDate: new Date(),
             rankingDate: new Date(),
             rankingTab: 'monthly',
             searchTerm: '',
-            players: JSON.parse(localStorage.getItem('saimidang_players')) || INITIAL_PLAYERS,
             activeModal: null, 
             modalData: null,
-            alertMessage: ''
+            alertMessage: '',
+            isDataLoaded: false, // DB 로딩 완료 여부
+            
+            // DB 동기화 상태 (초기값)
+            adminPassword: '1234',
+            attendance: {},
+            players: INITIAL_PLAYERS
         };
 
-        window.updateState = function(newState) {
+        // UI만 업데이트
+        window.updateUI = function(newState) {
             state = { ...state, ...newState };
-            localStorage.setItem('saimidang_attendance', JSON.stringify(state.attendance));
-            localStorage.setItem('saimidang_players', JSON.stringify(state.players));
-            localStorage.setItem('saimidang_admin_pw', state.adminPassword);
             render();
         };
 
-        window.changeView = (v) => updateState({ view: v, searchTerm: '' });
+        // DB에 업데이트 (자동 동기화)
+        window.updateDB = async function(newDBState) {
+            if (!currentUser) return;
+            state = { ...state, ...newDBState };
+            render(); // 화면 즉시 반영 (빠른 반응성)
+            
+            try {
+                const docRef = doc(db, 'artifacts', appIdStr, 'public', 'data', 'saimdang', 'main');
+                await setDoc(docRef, {
+                    players: state.players,
+                    attendance: state.attendance,
+                    adminPassword: state.adminPassword
+                }, { merge: true });
+            } catch (e) {
+                console.error("DB Save Error:", e);
+            }
+        };
 
-        // 자체 모달 제어 기능
-        window.closeModal = () => updateState({ activeModal: null, alertMessage: '', modalData: null });
+        // 3. 파이어베이스 인증 & 실시간 데이터 수신
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Auth init failed:", error);
+                window.updateUI({ alertMessage: "DB 연결 실패. 설정값을 확인해주세요.", isDataLoaded: true });
+            }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            if (user) listenToData();
+        });
+
+        const listenToData = () => {
+            const docRef = doc(db, 'artifacts', appIdStr, 'public', 'data', 'saimdang', 'main');
+            onSnapshot(docRef, (snap) => {
+                if (snap.exists()) {
+                    const data = snap.data();
+                    state.players = data.players || INITIAL_PLAYERS;
+                    state.attendance = data.attendance || {};
+                    state.adminPassword = data.adminPassword || '1234';
+                } else {
+                    // 최초 접속 시 DB 구조 생성
+                    setDoc(docRef, {
+                        players: INITIAL_PLAYERS,
+                        attendance: {},
+                        adminPassword: '1234'
+                    }, { merge: true });
+                }
+                state.isDataLoaded = true;
+                render();
+            }, (error) => {
+                console.error("Snapshot error:", error);
+            });
+        };
+
+        initAuth(); // 인증 시작
+
+        // 4. 이벤트 핸들러 모음
+        window.changeView = (v) => window.updateUI({ view: v, searchTerm: '' });
+        window.closeModal = () => window.updateUI({ activeModal: null, alertMessage: '', modalData: null });
 
         window.toggleLoginModal = (show) => {
             if (state.isAdmin && show) {
-                updateState({ activeModal: 'confirmLogout' });
+                window.updateUI({ activeModal: 'confirmLogout' });
             } else {
-                updateState({ activeModal: show ? 'login' : null, alertMessage: '' });
+                window.updateUI({ activeModal: show ? 'login' : null, alertMessage: '' });
             }
         };
 
         window.handleLogin = () => {
             const input = document.getElementById('pwInput');
             if (input && input.value === state.adminPassword) {
-                updateState({ isAdmin: true, activeModal: null, alertMessage: '' });
+                window.updateUI({ isAdmin: true, activeModal: null, alertMessage: '' });
             } else {
-                updateState({ alertMessage: '비밀번호가 일치하지 않습니다.' });
+                window.updateUI({ alertMessage: '비밀번호가 일치하지 않습니다.' });
             }
         };
 
-        window.handleLogout = () => {
-            updateState({ isAdmin: false, view: 'dashboard', activeModal: null });
-        };
+        window.handleLogout = () => window.updateUI({ isAdmin: false, view: 'dashboard', activeModal: null });
 
-        // 비밀번호 변경 기능
-        window.openChangePwModal = () => updateState({ activeModal: 'changePw', alertMessage: '' });
+        window.openChangePwModal = () => window.updateUI({ activeModal: 'changePw', alertMessage: '' });
         window.handleChangePw = () => {
             const current = document.getElementById('currentPwInput').value;
             const next = document.getElementById('newPwInput').value;
-            if (current !== state.adminPassword) {
-                updateState({ alertMessage: '현재 비밀번호가 올바르지 않습니다.' });
-                return;
-            }
-            if (!next || !next.trim()) {
-                updateState({ alertMessage: '새 비밀번호를 입력해주세요.' });
-                return;
-            }
-            updateState({ adminPassword: next.trim(), activeModal: 'alert', alertMessage: '비밀번호가 성공적으로 변경되었습니다.' });
+            if (current !== state.adminPassword) return window.updateUI({ alertMessage: '현재 비밀번호가 올바르지 않습니다.' });
+            if (!next || !next.trim()) return window.updateUI({ alertMessage: '새 비밀번호를 입력해주세요.' });
+            
+            window.updateDB({ adminPassword: next.trim() });
+            window.updateUI({ activeModal: 'alert', alertMessage: '비밀번호가 성공적으로 변경되었습니다.' });
         };
 
-        // 선수 등록 기능
-        window.openAddPlayerModal = () => updateState({ activeModal: 'addPlayer', alertMessage: '' });
+        window.openAddPlayerModal = () => window.updateUI({ activeModal: 'addPlayer', alertMessage: '' });
         window.handleAddPlayer = () => {
             const name = document.getElementById('playerNameInput').value;
             if (name && name.trim()) {
                 const nextId = state.players.length > 0 ? Math.max(...state.players.map(p => p.id)) + 1 : 1;
-                updateState({ 
-                    players: [...state.players, { id: nextId, name: name.trim() }],
-                    activeModal: 'alert',
-                    alertMessage: `'${name.trim()}' 선수가 등록되었습니다.`
-                });
+                window.updateDB({ players: [...state.players, { id: nextId, name: name.trim() }] });
+                window.updateUI({ activeModal: 'alert', alertMessage: `'${name.trim()}' 선수가 등록되었습니다.` });
             } else {
-                updateState({ alertMessage: '이름을 입력해주세요.' });
+                window.updateUI({ alertMessage: '이름을 입력해주세요.' });
             }
         };
 
-        // 선수 삭제 기능
-        window.openDelPlayerModal = (id, name) => updateState({ activeModal: 'delPlayer', modalData: { id, name } });
+        window.openDelPlayerModal = (id, name) => window.updateUI({ activeModal: 'delPlayer', modalData: { id, name } });
         window.handleDelPlayer = () => {
             const id = state.modalData.id;
-            updateState({ 
-                players: state.players.filter(p => p.id !== id),
-                activeModal: 'alert',
-                alertMessage: '선수가 명단에서 삭제되었습니다.'
-            });
+            window.updateDB({ players: state.players.filter(p => p.id !== id) });
+            window.updateUI({ activeModal: 'alert', alertMessage: '선수가 명단에서 삭제되었습니다.' });
         };
 
         window.toggleCheck = (pid) => {
             if (!state.isAdmin) return;
             const key = `${getYMD(state.currentDate)}-${pid}`;
-            updateState({ 
-                attendance: { ...state.attendance, [key]: !state.attendance[key] } 
-            });
+            window.updateDB({ attendance: { ...state.attendance, [key]: !state.attendance[key] } });
         };
 
         window.adjustDate = (val) => {
             const d = new Date(state.currentDate);
             d.setDate(d.getDate() + val);
-            updateState({ currentDate: d });
+            window.updateUI({ currentDate: d });
         };
 
         window.adjustMonth = (val) => {
             const d = new Date(state.rankingDate);
             d.setMonth(d.getMonth() + val);
-            updateState({ rankingDate: d });
+            window.updateUI({ rankingDate: d });
         };
 
         window.handleSearch = (val) => {
@@ -180,7 +253,6 @@
             }).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
         };
 
-        // 모달 렌더링 헬퍼
         const renderModalContent = () => {
             switch(state.activeModal) {
                 case 'login': return `
@@ -245,18 +317,27 @@
             const app = document.getElementById('app');
             if (!app) return;
 
+            // 로딩 화면
+            if (!state.isDataLoaded) {
+                app.innerHTML = `
+                    <div class="fixed inset-0 bg-[#F8FAFC] flex flex-col items-center justify-center z-50">
+                        <div class="w-16 h-16 border-4 border-slate-100 border-t-orange-500 rounded-full animate-spin mb-6"></div>
+                        <p class="text-slate-500 font-bold animate-pulse text-sm">실시간 데이터를 불러오는 중입니다...</p>
+                    </div>
+                `;
+                return;
+            }
+
             const totalStats = getStats('total');
             const monthlyStats = getStats('monthly', state.currentDate);
             const top5 = monthlyStats.slice(0, 5);
 
-            // 누적 출석왕 동률 계산 로직
             let topNames = '기록 없음';
             let topCount = 0;
             let isTie = false;
             
             if (totalStats.length > 0 && totalStats[0].count > 0) {
                 topCount = totalStats[0].count;
-                // 최고 점수와 같은 점수를 가진 모든 선수 필터링
                 const topPlayers = totalStats.filter(p => p.count === topCount);
                 topNames = topPlayers.map(p => p.name).join(', ');
                 isTie = topPlayers.length > 1;
@@ -340,8 +421,8 @@
                         <div class="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden animate-fade-in">
                             <div class="p-6 space-y-6 text-center border-b border-slate-50">
                                 <div class="flex p-1.5 bg-slate-100 rounded-2xl">
-                                    <button onclick="window.updateState({rankingTab:'monthly'})" class="flex-1 py-3.5 text-xs font-black rounded-xl ${state.rankingTab==='monthly'?'bg-white text-orange-600 shadow-sm':'text-slate-400'}">월간</button>
-                                    <button onclick="window.updateState({rankingTab:'total'})" class="flex-1 py-3.5 text-xs font-black rounded-xl ${state.rankingTab==='total'?'bg-white text-orange-600 shadow-sm':'text-slate-400'}">전체</button>
+                                    <button onclick="window.updateUI({rankingTab:'monthly'})" class="flex-1 py-3.5 text-xs font-black rounded-xl ${state.rankingTab==='monthly'?'bg-white text-orange-600 shadow-sm':'text-slate-400'}">월간</button>
+                                    <button onclick="window.updateUI({rankingTab:'total'})" class="flex-1 py-3.5 text-xs font-black rounded-xl ${state.rankingTab==='total'?'bg-white text-orange-600 shadow-sm':'text-slate-400'}">전체</button>
                                 </div>
                                 ${state.rankingTab === 'monthly' ? `
                                     <div class="flex items-center justify-center gap-8 py-2">
@@ -426,7 +507,6 @@
             lucide.createIcons();
             if (state.view === 'attendance') renderAttendanceList();
             
-            // 모달 오픈 시 자동 포커스
             if (state.activeModal === 'login') setTimeout(() => document.getElementById('pwInput')?.focus(), 50);
             if (state.activeModal === 'changePw') setTimeout(() => document.getElementById('currentPwInput')?.focus(), 50);
             if (state.activeModal === 'addPlayer') setTimeout(() => document.getElementById('playerNameInput')?.focus(), 50);
@@ -459,7 +539,7 @@
             }).join('');
         }
 
-        window.onload = render;
+        render(); // 최초 로딩 화면 띄우기
     </script>
 </body>
 </html>
